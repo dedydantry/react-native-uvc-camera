@@ -8,7 +8,9 @@ import android.widget.Toast
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.jiangdg.ausbc.MultiCameraClient
+import com.jiangdg.ausbc.callback.ICaptureCallBack
 import com.jiangdg.ausbc.callback.IDeviceConnectCallBack
+import com.jiangdg.ausbc.render.env.RotateType
 import com.jiangdg.usb.USBMonitor
 
 class UVCDeviceModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
@@ -101,19 +103,26 @@ class UVCDeviceModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
         mCameraClient?.register()
     }
 
+    // ======================== Helper ========================
+
+    private fun getCameraOrReject(deviceId: Int, promise: Promise): UVCCameraView? {
+        val camera = UVCCameraView.getCamera(deviceId)
+        if (camera == null) {
+            promise.reject("CAMERA_NOT_FOUND", "No active camera for deviceId: $deviceId")
+        }
+        return camera
+    }
+
+    // ======================== Device Management ========================
+
     @ReactMethod
     fun getDeviceList(promise: Promise) {
         try {
             val usbManager = reactApplicationContext.getSystemService(Context.USB_SERVICE) as UsbManager
-            // 筛选出UVC设备
             val devices = usbManager.deviceList.values.filter {
-                // UVC设备的特征：
-                // 1. deviceClass 可能是 USB_CLASS_VIDEO (0x0E) 或 USB_CLASS_MISC (0xEF)
-                // 2. 如果是 USB_CLASS_MISC，需要检查接口类型
                 when (it.deviceClass) {
                     UsbConstants.USB_CLASS_VIDEO -> true
                     UsbConstants.USB_CLASS_MISC -> {
-                        // 检查接口是否包含视频类
                         var hasVideoInterface = false
                         for (i in 0 until it.interfaceCount) {
                             val intf = it.getInterface(i)
@@ -180,6 +189,566 @@ class UVCDeviceModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
             promise.reject("ERROR", e.message)
         }
     }
+
+    // ======================== Camera Operations ========================
+
+    @ReactMethod
+    fun captureImage(deviceId: Int, savePath: String?, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.takePicture(object : ICaptureCallBack {
+                override fun onBegin() {}
+                override fun onError(error: String?) {
+                    promise.reject("CAPTURE_ERROR", error ?: "Unknown error")
+                }
+                override fun onComplete(path: String?) {
+                    promise.resolve(path)
+                }
+            }, savePath)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun captureVideoStart(deviceId: Int, savePath: String?, durationInSec: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.startVideoRecording(object : ICaptureCallBack {
+                override fun onBegin() {}
+                override fun onError(error: String?) {
+                    sendEvent("onCaptureVideoError", Arguments.createMap().apply {
+                        putInt("deviceId", deviceId)
+                        putString("error", error)
+                    })
+                }
+                override fun onComplete(path: String?) {
+                    sendEvent("onCaptureVideoComplete", Arguments.createMap().apply {
+                        putInt("deviceId", deviceId)
+                        putString("path", path)
+                    })
+                }
+            }, savePath, durationInSec.toLong())
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun captureVideoStop(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.stopVideoRecording()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun captureAudioStart(deviceId: Int, savePath: String?, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.startAudioRecording(object : ICaptureCallBack {
+                override fun onBegin() {}
+                override fun onError(error: String?) {
+                    sendEvent("onCaptureAudioError", Arguments.createMap().apply {
+                        putInt("deviceId", deviceId)
+                        putString("error", error)
+                    })
+                }
+                override fun onComplete(path: String?) {
+                    sendEvent("onCaptureAudioComplete", Arguments.createMap().apply {
+                        putInt("deviceId", deviceId)
+                        putString("path", path)
+                    })
+                }
+            }, savePath)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun captureAudioStop(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.stopAudioRecording()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun isCameraOpened(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            promise.resolve(camera.checkCameraOpened())
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun closeCamera(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doCloseCamera()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun updateResolution(deviceId: Int, width: Int, height: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doUpdateResolution(width, height)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getAllPreviewSizes(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val sizes = camera.doGetAllPreviewSizes()
+            if (sizes == null) {
+                promise.resolve(Arguments.createArray())
+                return
+            }
+            val result = Arguments.createArray()
+            sizes.forEach { size ->
+                val sizeMap = Arguments.createMap().apply {
+                    putInt("width", size.width)
+                    putInt("height", size.height)
+                }
+                result.pushMap(sizeMap)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getCurrentPreviewSize(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val size = camera.doGetCurrentPreviewSize()
+            if (size == null) {
+                promise.resolve(null)
+                return
+            }
+            val result = Arguments.createMap().apply {
+                putInt("width", size.width)
+                putInt("height", size.height)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun setRotateType(deviceId: Int, angle: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val rotateType = when (angle) {
+                0 -> RotateType.ANGLE_0
+                90 -> RotateType.ANGLE_90
+                180 -> RotateType.ANGLE_180
+                270 -> RotateType.ANGLE_270
+                else -> {
+                    promise.reject("ERROR", "Invalid angle: $angle. Use 0, 90, 180, or 270.")
+                    return
+                }
+            }
+            camera.doSetRotateType(rotateType)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun sendCameraCommand(deviceId: Int, command: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSendCameraCommand(command)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Streaming ========================
+
+    @ReactMethod
+    fun captureStreamStart(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doStartCaptureStream()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun captureStreamStop(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doStopCaptureStream()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun startPlayMic(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doStartPlayMic()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun stopPlayMic(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doStopPlayMic()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Auto Focus ========================
+
+    @ReactMethod
+    fun setAutoFocus(deviceId: Int, focus: Boolean, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetAutoFocus(focus)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getAutoFocus(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            promise.resolve(camera.doGetAutoFocus() ?: false)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetAutoFocus(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetAutoFocus()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Brightness ========================
+
+    @ReactMethod
+    fun setBrightness(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetBrightness(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getBrightness(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetBrightness()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetBrightness(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetBrightness()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Contrast ========================
+
+    @ReactMethod
+    fun setContrast(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetContrast(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getContrast(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetContrast()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetContrast(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetContrast()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Gain ========================
+
+    @ReactMethod
+    fun setGain(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetGain(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getGain(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetGain()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetGain(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetGain()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Gamma ========================
+
+    @ReactMethod
+    fun setGamma(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetGamma(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getGamma(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetGamma()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetGamma(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetGamma()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Hue ========================
+
+    @ReactMethod
+    fun setHue(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetHue(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getHue(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetHue()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetHue(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetHue()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Zoom ========================
+
+    @ReactMethod
+    fun setZoom(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetZoom(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getZoom(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetZoom()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetZoom(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetZoom()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Sharpness ========================
+
+    @ReactMethod
+    fun setSharpness(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetSharpness(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getSharpness(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetSharpness()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetSharpness(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetSharpness()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Saturation ========================
+
+    @ReactMethod
+    fun setSaturation(deviceId: Int, value: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doSetSaturation(value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun getSaturation(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            val value = camera.doGetSaturation()
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun resetSaturation(deviceId: Int, promise: Promise) {
+        try {
+            val camera = getCameraOrReject(deviceId, promise) ?: return
+            camera.doResetSaturation()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // ======================== Events ========================
 
     private fun sendEvent(eventName: String, params: WritableMap?) {
         reactApplicationContext
