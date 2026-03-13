@@ -12,6 +12,8 @@ class USBCameraPackage : ReactPackage {
         return listOf(UVCCameraViewManager())
     }
 
+    @Suppress("DEPRECATION")
+    @Deprecated("Deprecated in Java")
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
         return listOf(UVCDeviceModule(reactContext))
     }

@@ -7,7 +7,6 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.fragment.app.FragmentActivity
 import com.facebook.react.bridge.ReadableArray
-import com.facebook.react.common.MapBuilder
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.ViewGroupManager
@@ -112,29 +111,21 @@ class UVCCameraViewManager : ViewGroupManager<FrameLayout>() {
         )
     }
 
-    override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any>? {
-        return MapBuilder.builder<String, Any>()
-            .put("setDeviceId",
-                MapBuilder.of(
-                    "registrationName",
-                    "onSetDeviceId"
-                ))
-            .put("setResolution",
-                MapBuilder.of(
-                    "registrationName",
-                    "onSetResolution"
-                ))
-            .build()
+    override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> {
+        return mutableMapOf(
+            "setDeviceId" to mapOf("registrationName" to "onSetDeviceId"),
+            "setResolution" to mapOf("registrationName" to "onSetResolution")
+        )
     }
 
     override fun receiveCommand(
         root: FrameLayout,
-        commandId: Int,
+        commandId: String,
         args: ReadableArray?
     ) {
         super.receiveCommand(root, commandId, args)
         when (commandId) {
-            COMMAND_SET_DEVICE_ID -> {
+            "setDeviceId" -> {
                 args?.getInt(0)?.let { deviceId ->
                     try {
                         root.post {

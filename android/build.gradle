@@ -46,6 +46,16 @@ repositories {
 
 dependencies {
     implementation 'com.facebook.react:react-native:+'
-    api('com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.3.3')
-    api('com.github.jiangdongguo.AndroidUSBCamera:libuvc:3.3.3')
+
+    // Local AAR files (rebuilt with 16KB page alignment for Google Play)
+    api files('libs/libausbc-release.aar')
+    api files('libs/libuvc-release.aar')
+    api files('libs/libnative-release.aar')
+
+    // Transitive dependencies required by libausbc/libuvc/libnative
+    implementation 'androidx.appcompat:appcompat:1.3.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
+    implementation 'com.google.android.material:material:1.3.0'
+    implementation 'androidx.core:core-ktx:1.3.2'
+    api 'com.elvishew:xlog:1.11.0'
 }

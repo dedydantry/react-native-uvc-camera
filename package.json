@@ -11,8 +11,7 @@
     "react-native-uvc-camera.podspec"
   ],
   "scripts": {
-    "build": "tsc",
-    "prepare": "npm run build"
+    "build": "tsc"
   },
   "keywords": [
     "react-native",
@@ -28,12 +27,5 @@
   "peerDependencies": {
     "react": "*",
     "react-native": "*"
-  },
-  "devDependencies": {
-    "react": "18.3.1",
-    "react-native": "0.76.5",
-    "@types/react": "^18.2.0",
-    "@types/react-native": "^0.72.0",
-    "typescript": "^5.0.0"
   }
 }
