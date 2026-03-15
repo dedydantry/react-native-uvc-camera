@@ -33,12 +33,15 @@ const UVCDeviceModule = {
 
   // ======================== Camera Operations ========================
 
-  /** Capture image. Returns the saved file path. */
+  /** Capture image. Returns the saved file path.
+   *  @param highResCapture When true, temporarily switches to the highest available resolution
+   *  before capturing, then restores the previous resolution. Default: false. */
   captureImage: async (
     deviceId: number,
     savePath?: string | null,
+    highResCapture: boolean = false,
   ): Promise<string> => {
-    return NativeModules.UVCDeviceModule.captureImage(deviceId, savePath ?? null);
+    return NativeModules.UVCDeviceModule.captureImage(deviceId, savePath ?? null, highResCapture);
   },
 
   /** Start video recording. Video completion/error emitted via events. */

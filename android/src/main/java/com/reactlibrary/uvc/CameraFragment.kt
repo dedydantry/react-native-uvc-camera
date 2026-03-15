@@ -62,6 +62,7 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
 
     protected fun setDevice(device: UsbDevice?) {
         mCurrentDevice = device;
+        Log.d(TAG, "setDevice: deviceId=${device?.deviceId}, surfaceInited=$surfaceInited")
         if(surfaceInited) {
             if (device != null) {
                 openDevice(device)
@@ -71,29 +72,29 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
     }
 
     protected fun openDevice(device:UsbDevice) {
-        context?.let {
+        context?.let { ctx ->
             if (mCameraMap.containsKey(device.deviceId)) {
+                Log.d(TAG, "openDevice: camera already in map for deviceId=${device.deviceId}")
                 return
             }
-            generateCamera(it, device).apply {
-                mCameraMap[device.deviceId] = this
+            val ctrlBlock = UVCDeviceModule.getCtrlBlock(device.deviceId)
+            if (ctrlBlock == null) {
+                Log.w(TAG, "openDevice: ctrlBlock is null for deviceId=${device.deviceId}, cannot open camera")
+                return
             }
-            mCameraMap[device.deviceId]?.apply {
-                UVCDeviceModule.getCtrlBlock(device.deviceId)?.let { block ->
-                    setUsbControlBlock(block)
-                }
-            }?.also { camera ->
-                try {
-                    mCurrentCamera?.cancel(true)
-                    mCurrentCamera = null
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-                mCurrentCamera = SettableFuture()
-                mCurrentCamera?.set(camera)
-                openCamera(mCameraView)
-                Logger.i(TAG, "camera connection. pid: ${device.productId}, vid: ${device.vendorId}")
+            val camera = generateCamera(ctx, device)
+            mCameraMap[device.deviceId] = camera
+            camera.setUsbControlBlock(ctrlBlock)
+            try {
+                mCurrentCamera?.cancel(true)
+                mCurrentCamera = null
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
+            mCurrentCamera = SettableFuture()
+            mCurrentCamera?.set(camera)
+            openCamera(mCameraView)
+            Log.d(TAG, "openDevice: camera opened. pid=${device.productId}, vid=${device.vendorId}")
         }
     }
 
@@ -113,6 +114,7 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
             override fun onSurfaceTextureAvailable(p0: SurfaceTexture, p1: Int, p2: Int) {
                 surfaceInited = true;
                 val defaultCamera = mCurrentDevice
+                Log.d(TAG, "onSurfaceTextureAvailable: mCurrentDevice=${defaultCamera?.deviceId}")
                 if (defaultCamera == null) {
                     return
                 }

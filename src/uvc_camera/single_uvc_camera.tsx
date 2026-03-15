@@ -1,5 +1,4 @@
 import {
-  requireNativeComponent,
   Text,
   View,
   findNodeHandle,
@@ -12,20 +11,16 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import { UVCDeviceModule, PreviewSize, RotateAngle } from "./uvc_device_module";
 import { TaskQueue, useDevices, useDeviceEvent } from "./help";
+import { UVCCameraView, ViewCommands } from "./native_view";
 
 const isDev = __DEV__;
 
 const taskQueue = new TaskQueue();
-
-const ComponentName = "UVCCameraView";
-const UVCCameraView = requireNativeComponent(ComponentName);
-const Commands = UIManager.getViewManagerConfig(ComponentName)?.Commands;
 
 /** Handle exposed by SingleUVCCamera ref */
 export interface SingleUVCCameraHandle {
@@ -159,6 +154,10 @@ const SingleUVCCamera = forwardRef<SingleUVCCameraHandle, SingleUVCCameraProps>(
     const viewRef = useRef<View>(null);
     const cameraViewRef = useRef(null);
     const [connected, setConnected] = useState(false);
+    const permissionDeniedRef = useRef(false);
+    const retryCountRef = useRef(0);
+    const connectingRef = useRef(false);
+    const MAX_RETRIES = 2;
 
     // Guard helper for ref methods
     const requireDeviceId = (): number => {
@@ -277,46 +276,99 @@ const SingleUVCCamera = forwardRef<SingleUVCCameraHandle, SingleUVCCameraProps>(
     // Auto-connect to device
     const doConnect = useCallback(async () => {
       if (deviceId == null) return;
+
+      // Already connected or in progress — skip
+      if (connected || connectingRef.current) return;
+      
+      // Don't retry if permission was already denied for this device
+      if (permissionDeniedRef.current) {
+        console.log('SingleUVCCamera: Permission was denied, not retrying automatically');
+        return;
+      }
+      
+      // Limit retries to prevent infinite loops
+      if (retryCountRef.current >= MAX_RETRIES) {
+        console.log('SingleUVCCamera: Max retries reached, stopping');
+        return;
+      }
+
+      connectingRef.current = true;
+      retryCountRef.current += 1;
+      
       try {
         const isGranted = (await taskQueue.addTask(() =>
           UVCDeviceModule.requestPermission(deviceId)
         )) as boolean;
 
         if (isGranted) {
+          retryCountRef.current = 0;
+          permissionDeniedRef.current = false;
           const node = findNodeHandle(cameraViewRef.current);
           if (node) {
-            UIManager.dispatchViewManagerCommand(node, Commands.setDeviceId, [
+            UIManager.dispatchViewManagerCommand(node, ViewCommands.setDeviceId, [
               deviceId,
             ]);
             setConnected(true);
-            onCameraReady?.(deviceId);
+            // Give native side time to process the command before
+            // notifying JS that the camera is ready.
+            setTimeout(() => {
+              onCameraReady?.(deviceId);
+            }, 1000);
           }
+        } else {
+          // Permission denied — stop retrying
+          permissionDeniedRef.current = true;
+          console.log('SingleUVCCamera: Permission denied by user');
         }
       } catch (error) {
         console.error("SingleUVCCamera: Failed to connect:", error);
+      } finally {
+        connectingRef.current = false;
       }
-    }, [deviceId, onCameraReady]);
+    }, [deviceId, connected, onCameraReady]);
 
     const { state } = useDeviceEvent({
       deviceId: deviceId ?? -1,
       onDisconnected: () => {
         setConnected(false);
+        connectingRef.current = false;
+        // Reset permission state when device is physically disconnected,
+        // so next plug-in will try again
+        permissionDeniedRef.current = false;
+        retryCountRef.current = 0;
         onCameraDisconnected?.();
+      },
+      onDetached: () => {
+        // Device physically removed — reset everything
+        setConnected(false);
+        connectingRef.current = false;
+        permissionDeniedRef.current = false;
+        retryCountRef.current = 0;
       },
     });
 
+    // Reset retry counter when device changes
     useEffect(() => {
-      if (deviceId != null) {
+      permissionDeniedRef.current = false;
+      retryCountRef.current = 0;
+    }, [deviceId]);
+
+    useEffect(() => {
+      // Only attempt connection on states that make sense.
+      // Do NOT retry on "permissionDenied" to avoid infinite loop.
+      if (deviceId != null && state !== "permissionDenied" && !permissionDeniedRef.current) {
         doConnect();
       }
     }, [state, doConnect, deviceId]);
 
-    // Measure view for native component sizing
+    // Track view dimensions via onLayout so the native camera view
+    // always has a real size (a 0×0 view won’t create a Surface).
     const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
-    useLayoutEffect(() => {
-      viewRef.current?.measure((_ox, _oy, width, height) => {
+    const handleLayout = useCallback((e: any) => {
+      const { width, height } = e.nativeEvent.layout;
+      if (width > 0 && height > 0) {
         setViewSize({ width, height });
-      });
+      }
     }, []);
 
     if (deviceId == null) {
@@ -328,11 +380,11 @@ const SingleUVCCamera = forwardRef<SingleUVCCameraHandle, SingleUVCCameraProps>(
     }
 
     return (
-      <View ref={viewRef} style={[styles.full, style]}>
+      <View ref={viewRef} onLayout={handleLayout} style={[styles.full, style]}>
         <UVCCameraView
           ref={cameraViewRef}
           // @ts-ignore
-          style={{ width: viewSize.width, height: viewSize.height }}
+          style={StyleSheet.absoluteFill}
         />
         {debug && (
           <>

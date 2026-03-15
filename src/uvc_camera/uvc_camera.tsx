@@ -1,5 +1,4 @@
 import {
-  requireNativeComponent,
   Text,
   View,
   findNodeHandle,
@@ -9,21 +8,17 @@ import {
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import { UVCDeviceModule } from "./uvc_device_module";
 import { TaskQueue, useDevices } from "./help";
 import { useDeviceEvent } from "./help";
+import { UVCCameraView, ViewCommands } from "./native_view";
 
 const isDev = __DEV__;
 
 const taskQueue = new TaskQueue();
-
-const ComponentName = "UVCCameraView";
-const UVCCameraView = requireNativeComponent(ComponentName);
-const Commands = UIManager.getViewManagerConfig(ComponentName)?.Commands;
 
 const BaseUVCCamera = ({ deviceId }: { deviceId: number }) => {
   const viewRef = useRef<View>(null);
@@ -44,7 +39,7 @@ const BaseUVCCamera = ({ deviceId }: { deviceId: number }) => {
         const node = findNodeHandle(cameraViewRef.current);
         if (node) {
           console.log("setDeviceId", deviceId);
-          UIManager.dispatchViewManagerCommand(node, Commands.setDeviceId, [
+          UIManager.dispatchViewManagerCommand(node, ViewCommands.setDeviceId, [
             deviceId,
           ]);
         }
@@ -80,20 +75,12 @@ const BaseUVCCamera = ({ deviceId }: { deviceId: number }) => {
     // }
   }, [state, doConnect]);
 
-  // 获取预览大小
-  const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
-  useLayoutEffect(() => {
-    viewRef.current?.measure((ox, oy, width, height) => {
-      setViewSize({ width, height });
-    });
-  }, []);
-
   return (
     <View ref={viewRef} style={styles.full}>
       <UVCCameraView
         ref={cameraViewRef}
         // @ts-ignore
-        style={{ width: viewSize.width, height: viewSize.height }}
+        style={StyleSheet.absoluteFill}
       />
       {isDev && <Text style={styles.rightTop}>{state}</Text>}
     </View>

@@ -4,10 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.LayoutInflater
+import android.widget.FrameLayout
 import android.widget.Toast
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
@@ -16,10 +18,9 @@ import com.jiangdg.ausbc.camera.bean.PreviewSize
 import com.jiangdg.ausbc.render.env.RotateType
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
 import com.jiangdg.ausbc.widget.IAspectRatio
-import com.reactlibrary.databinding.FragmentUvcCameraBinding
 
 class UVCCameraView : CameraFragment() {
-    lateinit var mViewBinding: FragmentUvcCameraBinding
+    private lateinit var mCameraContainer: FrameLayout
     private var currentDeviceId: Int? = null
 
     companion object {
@@ -39,8 +40,13 @@ class UVCCameraView : CameraFragment() {
     }
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View? {
-        mViewBinding = FragmentUvcCameraBinding.inflate(inflater, container, false)
-        return mViewBinding.root
+        mCameraContainer = FrameLayout(requireContext()).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+        return mCameraContainer
     }
 
     override fun getGravity(): Int = Gravity.CENTER
@@ -68,7 +74,7 @@ class UVCCameraView : CameraFragment() {
     }
 
     override fun getCameraViewContainer(): ViewGroup? {
-        return mViewBinding.cameraViewContainer
+        return mCameraContainer
     }
 
     @SuppressLint("ServiceCast")
@@ -78,14 +84,17 @@ class UVCCameraView : CameraFragment() {
     }
 
     fun setDeviceId(deviceId: Int?) {
+        Log.d("UVCCameraView", "setDeviceId: $deviceId (current: $currentDeviceId)")
+        // Same device — nothing to do
+        if (currentDeviceId == deviceId) return
+
         // Unregister old deviceId
         currentDeviceId?.let { activeCameras.remove(it) }
-
-        if (currentDeviceId == deviceId) return
         currentDeviceId = deviceId
 
         // Register new deviceId
         deviceId?.let { activeCameras[it] = this }
+        Log.d("UVCCameraView", "activeCameras keys: ${activeCameras.keys}")
 
         var isSet = false
         getUsbDeviceList()?.forEach { device ->
@@ -95,6 +104,7 @@ class UVCCameraView : CameraFragment() {
             }
         }
         if (!isSet) {
+            Log.w("UVCCameraView", "setDeviceId: USB device not found in system device list")
             setDevice(null)
         }
     }

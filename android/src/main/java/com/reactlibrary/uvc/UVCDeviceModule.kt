@@ -164,6 +164,10 @@ class UVCDeviceModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 return
             }
 
+            // Always go through mCameraClient.requestPermission so that
+            // onConnectDev fires and the ctrlBlock is stored.  The AUSBC
+            // library handles the "already has permission" case internally
+            // (connects without showing a dialog).
             pendingPermissionPromise = promise
             pendingPermissionDeviceId = deviceId
 
@@ -193,18 +197,63 @@ class UVCDeviceModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     // ======================== Camera Operations ========================
 
     @ReactMethod
-    fun captureImage(deviceId: Int, savePath: String?, promise: Promise) {
+    fun captureImage(deviceId: Int, savePath: String?, highResCapture: Boolean, promise: Promise) {
         try {
             val camera = getCameraOrReject(deviceId, promise) ?: return
-            camera.takePicture(object : ICaptureCallBack {
-                override fun onBegin() {}
-                override fun onError(error: String?) {
-                    promise.reject("CAPTURE_ERROR", error ?: "Unknown error")
+
+            if (highResCapture) {
+                // Save current resolution before switching
+                val previousSize = camera.doGetCurrentPreviewSize()
+
+                // Find highest available resolution
+                val allSizes = camera.doGetAllPreviewSizes()
+                val highestSize = allSizes
+                    ?.maxWithOrNull(compareBy({ it.width.toLong() * it.height.toLong() }))
+
+                if (highestSize != null && previousSize != null &&
+                    (highestSize.width != previousSize.width || highestSize.height != previousSize.height)
+                ) {
+                    // Switch to highest resolution, wait for it to settle, then capture
+                    camera.doUpdateResolution(highestSize.width, highestSize.height)
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        camera.takePicture(object : ICaptureCallBack {
+                            override fun onBegin() {}
+                            override fun onError(error: String?) {
+                                // Restore previous resolution before rejecting
+                                camera.doUpdateResolution(previousSize.width, previousSize.height)
+                                promise.reject("CAPTURE_ERROR", error ?: "Unknown error")
+                            }
+                            override fun onComplete(path: String?) {
+                                // Restore previous resolution after capture
+                                camera.doUpdateResolution(previousSize.width, previousSize.height)
+                                promise.resolve(path)
+                            }
+                        }, savePath)
+                    }, 800) // 800ms for camera to adjust to new resolution
+                } else {
+                    // Already at highest resolution or no sizes available, capture directly
+                    camera.takePicture(object : ICaptureCallBack {
+                        override fun onBegin() {}
+                        override fun onError(error: String?) {
+                            promise.reject("CAPTURE_ERROR", error ?: "Unknown error")
+                        }
+                        override fun onComplete(path: String?) {
+                            promise.resolve(path)
+                        }
+                    }, savePath)
                 }
-                override fun onComplete(path: String?) {
-                    promise.resolve(path)
-                }
-            }, savePath)
+            } else {
+                // Normal capture without resolution change
+                camera.takePicture(object : ICaptureCallBack {
+                    override fun onBegin() {}
+                    override fun onError(error: String?) {
+                        promise.reject("CAPTURE_ERROR", error ?: "Unknown error")
+                    }
+                    override fun onComplete(path: String?) {
+                        promise.resolve(path)
+                    }
+                }, savePath)
+            }
         } catch (e: Exception) {
             promise.reject("ERROR", e.message)
         }
